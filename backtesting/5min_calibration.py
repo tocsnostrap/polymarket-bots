@@ -59,9 +59,12 @@ TIME_BINS = [
     (180, 241, "180-240s"),
 ]
 
-MARKET_SPREAD = 0.04
-MIN_EDGE = 0.02
+MARKET_INEFFICIENCY_MEAN = 0.06
+MARKET_INEFFICIENCY_STD = 0.04
+EXECUTION_SPREAD = 0.02
+MIN_EDGE = 0.03
 TRADE_SIZE = 1.0
+RNG = np.random.default_rng(123)
 
 
 def _classify(move_pct: float, elapsed_s: int) -> tuple[str | None, str | None]:
@@ -190,7 +193,9 @@ def simulate_5min_trades(
             if fv is None or fv < 0.52:
                 continue
 
-            market_price = fv - MARKET_SPREAD / 2
+            inefficiency = RNG.normal(MARKET_INEFFICIENCY_MEAN, MARKET_INEFFICIENCY_STD)
+            market_price = max(0.01, min(0.99, fv - inefficiency))
+            market_price += EXECUTION_SPREAD / 2
             edge = fv - market_price
             if edge < MIN_EDGE:
                 continue

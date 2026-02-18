@@ -35,6 +35,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+RNG = np.random.default_rng(42)
+
 from data_fetcher import fetch_btc_candles
 from metrics import (
     PerformanceReport,
@@ -74,10 +76,15 @@ FAIR_VALUE_TABLE: list[tuple[float, float, int, int, float]] = [
     (0.20, 100.0, 600, 840, 0.9823),
 ]
 
-# Minimum edge over the market price to enter (basis points of probability)
+# Minimum edge (fair_value - market_price) required to enter
 MIN_EDGE = 0.03
-# Market spread (simulated): fair_value → market_price = fair_value - spread/2
-MARKET_SPREAD = 0.04
+# Polymarket market price is modeled as: base_probability + noise.
+# The base lags behind the true fair value.  The "inefficiency" parameter
+# controls how much the market under-prices the true probability on average.
+MARKET_INEFFICIENCY_MEAN = 0.06   # market underprices by ~6 pp on average
+MARKET_INEFFICIENCY_STD = 0.04    # with this much randomness
+# Polymarket charges ~2% spread via the order-book
+EXECUTION_SPREAD = 0.02
 TRADE_SIZE = 1.0  # $1 per trade for EV calculations
 
 
@@ -160,9 +167,9 @@ def simulate_entry_points(
 ) -> list[TradeRecord]:
     """
     For each interval, check every minute from 60 s to 840 s elapsed.
-    If the BTC move maps to a fair-value bucket and offers sufficient edge
-    over the simulated market price, record a trade.
-    Only the *first* qualifying entry per interval is taken (single entry).
+    If the BTC move maps to a fair-value bucket and the simulated Polymarket
+    price is cheap enough to offer MIN_EDGE, record a trade.
+    Only the *first* qualifying entry per interval is taken.
     """
     df = candles.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
@@ -176,8 +183,7 @@ def simulate_entry_points(
             continue
         open_price = iv.open_price
 
-        entered = False
-        for i, (ts, row) in enumerate(window.iterrows()):
+        for ts, row in window.iterrows():
             elapsed_s = int((ts - iv.start).total_seconds())
             if elapsed_s < 60 or elapsed_s > 840:
                 continue
@@ -191,20 +197,20 @@ def simulate_entry_points(
 
             direction = "UP" if current_price > open_price else "DOWN"
 
-            # Simulated market price: slightly worse than fair value
-            market_price = fv - MARKET_SPREAD / 2
-            edge = fv - market_price
+            # Model the Polymarket price as lagging the true fair value.
+            # The market "knows" BTC moved but hasn't fully priced in the
+            # momentum-persistence edge encoded in the calibration table.
+            inefficiency = RNG.normal(MARKET_INEFFICIENCY_MEAN, MARKET_INEFFICIENCY_STD)
+            market_price = max(0.01, min(0.99, fv - inefficiency))
+            market_price += EXECUTION_SPREAD / 2  # cost of crossing the spread
 
+            edge = fv - market_price
             if edge < MIN_EDGE:
                 continue
 
-            # Did the trade win?
-            if direction == "UP":
-                won = iv.went_up
-            else:
-                won = not iv.went_up
+            won = (direction == "UP") == iv.went_up
 
-            # Binary payout: pay market_price, receive $1 if win, $0 if lose
+            # Binary option payout: pay market_price, receive $1 if win, $0 if loss
             pnl = (TRADE_SIZE - market_price * TRADE_SIZE) if won else (-market_price * TRADE_SIZE)
 
             mb, tb = _bucket_label(move_pct, elapsed_s)
@@ -222,7 +228,6 @@ def simulate_entry_points(
                 move_bucket=mb,
                 time_bucket=tb,
             ))
-            entered = True
             break  # one entry per interval
 
     log.info("Simulated %d trades across %d intervals", len(trades), len(intervals))

@@ -75,12 +75,18 @@ def compute_metrics(
     r.best_trade = float(np.max(pnl))
     r.worst_trade = float(np.min(pnl))
 
-    # Sharpe ratio (annualized, assuming ~96 trades/day for 15-min intervals)
+    # Sharpe ratio (annualized)
     trades_per_day = r.total_trades / trade_days if trade_days > 0 else 1
     r.trade_frequency_per_day = trades_per_day
 
     if np.std(pnl) > 0:
-        daily_returns = pnl.reshape(-1, max(1, int(trades_per_day))).sum(axis=1) if trades_per_day > 1 else pnl
+        tpd = max(1, int(trades_per_day))
+        usable = (len(pnl) // tpd) * tpd
+        if usable >= tpd:
+            daily_returns = pnl[:usable].reshape(-1, tpd).sum(axis=1)
+        else:
+            daily_returns = pnl
+
         mean_daily = np.mean(daily_returns)
         std_daily = np.std(daily_returns)
         r.sharpe_ratio = float((mean_daily - risk_free_rate / 365) / std_daily * math.sqrt(365)) if std_daily > 0 else 0.0
