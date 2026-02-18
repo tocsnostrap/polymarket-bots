@@ -1,0 +1,6 @@
+[submodule "polymarket-bot"]
+	path = polymarket-bot
+	url = https://github.com/jmoss82/polymarket-bot
+[submodule "polyclawd"]
+	path = polyclawd
+	url = https://github.com/virtexvirtuoso/polyclawd
